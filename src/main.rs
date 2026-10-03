@@ -66,7 +66,7 @@ fn main() {
     let mut width = 100usize;
     let mut height = 38usize;
     let mut max_iter = 80u32;
-    let mut center = String::from("-0.5,0");
+    let mut center = String::from("-0.77568377,0.13646737");
     let mut zoom = 3.0f64;
 
     let args: Vec<String> = env::args().skip(1).collect();
@@ -113,7 +113,7 @@ fn main() {
         running.store(true, Ordering::SeqCst);
 
         // Ask user for rate
-        print!("\nEnter zoom rate (frames per second, or 'q' to quit): ");
+        print!("\nEnter zoom rate (frames per second, 0 for fastest, or 'q' to quit): ");
         let _ = io::stdout().flush();
 
         let mut input = String::new();
@@ -125,26 +125,40 @@ fn main() {
         }
 
         let rate: f64 = match input.parse() {
-            Ok(rate) if rate > 0.0 => rate,
+            Ok(rate) if rate >= 0.0 => rate,
             _ => {
-                println!("Invalid rate. Please enter a positive number or 'q' to quit.");
+                println!("Invalid rate. Please enter a non-negative number or 'q' to quit.");
                 continue;
             }
         };
 
-        let frame_duration = Duration::from_secs_f64(1.0 / rate);
+        let frame_duration = if rate == 0.0 {
+            Duration::ZERO
+        } else {
+            Duration::from_secs_f64(1.0 / rate)
+        };
         let zoom_factor = 0.9; // Zoom in by 10% each frame
         let start_zoom = current_zoom;
+        let mut previous_frame = None;
 
         // Main zoom loop
         while running.load(Ordering::SeqCst) {
             let start = Instant::now();
+            let frame_rate = previous_frame
+                .map(|previous: Instant| 1.0 / start.duration_since(previous).as_secs_f64())
+                .unwrap_or(0.0);
+            previous_frame = Some(start);
 
             // Clear screen and render
             clear_screen();
             let output = render(width, height, max_iter, center_r, center_i, current_zoom);
             let stdout = io::stdout();
             let mut out = stdout.lock();
+            let status = format!(
+                "Zoom: {:.6} | Rate: {:.2} fps | Press Ctrl+C to stop\n",
+                current_zoom, frame_rate
+            );
+            let _ = out.write_all(status.as_bytes());
             let _ = out.write_all(output.as_bytes());
             let _ = out.flush();
 
