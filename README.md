@@ -28,7 +28,7 @@ cargo run --release -- --width 120 --height 45 --iter 120
 cargo run --release -- --center -0.7441,0.0005 --zoom 0.005
 ```
 
-## Command-line options
+## Options
 
 - `--width`, `-w`: output width in characters
 - `--height`, `-h`: output height in characters
