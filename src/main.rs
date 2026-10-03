@@ -10,6 +10,10 @@
 
 use std::env;
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 // Zeichenskala: wenig Iterationen (weit außen) -> Punkt, viele -> dichte Zeichen
 const CHARS: &[u8] = b" .:-=+*#%@";
@@ -52,6 +56,11 @@ fn render(width: usize, height: usize, max_iter: u32,
     buf
 }
 
+fn clear_screen() {
+    print!("\x1B[2J\x1B[H");
+    let _ = io::stdout().flush();
+}
+
 fn main() {
     // Manuelle Argument-Parsing-Hilfslogik, um ohne externe Crates auszukommen.
     let mut width = 100usize;
@@ -70,8 +79,7 @@ fn main() {
             "--center" | "-c" => { i += 1; center = args.get(i).cloned().unwrap_or(center); }
             "--zoom" | "-z" => { i += 1; zoom = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(zoom); }
             other => {
-                eprintln!("Unbekannte Option: {other}\n\
-                    Nutzung: mandelbrot [--width N] [--height N] [--iter N] \
+                eprintln!("Unbekannte Option: {other}\n\n                    Nutzung: mandelbrot [--width N] [--height N] [--iter N] \
                     [--center real,imag] [--zoom F]");
                 std::process::exit(1);
             }
@@ -91,10 +99,68 @@ fn main() {
         }
     };
 
-    let output = render(width, height, max_iter, center_r, center_i, zoom);
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-    // Ein einzelner write_all statt Zeile für Zeile: deutlich schneller im Terminal.
-    let _ = out.write_all(output.as_bytes());
-    let _ = out.flush();
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    }).expect("Error setting Ctrl-C handler");
+
+    let mut current_zoom = zoom;
+
+    loop {
+        // Clear the Ctrl-C flag at the start of each loop iteration
+        running.store(true, Ordering::SeqCst);
+
+        // Ask user for rate
+        print!("\nEnter zoom rate (frames per second, or 'q' to quit): ");
+        let _ = io::stdout().flush();
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).expect("Failed to read input");
+
+        let input = input.trim();
+        if input.eq_ignore_ascii_case("q") || input.eq_ignore_ascii_case("quit") {
+            break;
+        }
+
+        let rate: f64 = match input.parse() {
+            Ok(rate) if rate > 0.0 => rate,
+            _ => {
+                println!("Invalid rate. Please enter a positive number or 'q' to quit.");
+                continue;
+            }
+        };
+
+        let frame_duration = Duration::from_secs_f64(1.0 / rate);
+        let zoom_factor = 0.9; // Zoom in by 10% each frame
+        let start_zoom = current_zoom;
+
+        // Main zoom loop
+        while running.load(Ordering::SeqCst) {
+            let start = Instant::now();
+
+            // Clear screen and render
+            clear_screen();
+            let output = render(width, height, max_iter, center_r, center_i, current_zoom);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            let _ = out.write_all(output.as_bytes());
+            let _ = out.flush();
+
+            // Update zoom for next frame
+            current_zoom *= zoom_factor;
+
+            // Sleep for the remaining frame time
+            let elapsed = start.elapsed();
+            if elapsed < frame_duration {
+                thread::sleep(frame_duration - elapsed);
+            }
+        }
+
+        // Reset zoom to initial value when interrupted
+        current_zoom = start_zoom;
+    }
+
+    println!("Goodbye!");
 }
