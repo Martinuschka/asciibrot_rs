@@ -41,5 +41,5 @@ cargo run --release -- --center -0.7441,0.0005 --zoom 0.005
 The default zoom center is the famous Seahorse region:
 
 ```text
-cargo run --release -- --center -0.77568377,0.13646737
+cargo run --release -- --center -0.743643887037151,0.131825904205330
 ```
