@@ -10,8 +10,8 @@
 
 use std::env;
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,6 +20,15 @@ const CHARS: &[u8] = b" .:-=+*#%@";
 
 // Grenze von f64: darunter fallen benachbarte Pixel auf denselben Wert
 const MIN_ZOOM: f64 = 1e-13;
+
+struct FractalView {
+    width: usize,
+    height: usize,
+    max_iter: u32,
+    center_r: f64,
+    center_i: f64,
+    initial_zoom: f64,
+}
 
 /// Gibt die Anzahl der Iterationen bis zur Divergenz zurück.
 fn mandelbrot_pixel(cr: f64, ci: f64, max_iter: u32) -> u32 {
@@ -37,8 +46,14 @@ fn mandelbrot_pixel(cr: f64, ci: f64, max_iter: u32) -> u32 {
     max_iter
 }
 
-fn render(width: usize, height: usize, max_iter: u32,
-          center_r: f64, center_i: f64, zoom: f64) -> String {
+fn render(
+    width: usize,
+    height: usize,
+    max_iter: u32,
+    center_r: f64,
+    center_i: f64,
+    zoom: f64,
+) -> String {
     // zoom = Höhe des sichtbaren Ausschnitts in der komplexen Ebene.
     // Der Faktor 2.1 gleicht das breitere Terminal-Zeichen aus.
     let scale_r = zoom * (width as f64 / height as f64) / 2.1;
@@ -90,23 +105,14 @@ fn clear_screen() {
 }
 
 /// Zoomt kontinuierlich mit der gegebenen Rate in das Fraktal, bis Ctrl+C gedrückt wird.
-fn zoom_loop(
-    running: &AtomicBool,
-    width: usize,
-    height: usize,
-    max_iter: u32,
-    center_r: f64,
-    center_i: f64,
-    initial_zoom: f64,
-    rate: f64,
-) {
+fn zoom_loop(running: &AtomicBool, view: &FractalView, rate: f64) {
     let frame_duration = if rate == 0.0 {
         Duration::ZERO
     } else {
         Duration::from_secs_f64(1.0 / rate)
     };
     let zoom_factor = 0.9; // Zoom in by 10% each frame
-    let mut zoom = initial_zoom;
+    let mut zoom = view.initial_zoom;
     let mut previous_frame: Option<Instant> = None;
 
     while running.load(Ordering::SeqCst) {
@@ -117,11 +123,18 @@ fn zoom_loop(
         previous_frame = Some(start);
 
         // Iterationen wachsen mit der Zoomtiefe
-        let iters = (max_iter as f64 + 40.0 * (initial_zoom / zoom).log2()) as u32;
+        let iters = (view.max_iter as f64 + 40.0 * (view.initial_zoom / zoom).log2()) as u32;
 
         // Clear screen and render
         clear_screen();
-        let output = render(width, height, iters, center_r, center_i, zoom);
+        let output = render(
+            view.width,
+            view.height,
+            iters,
+            view.center_r,
+            view.center_i,
+            zoom,
+        );
         let stdout = io::stdout();
         let mut out = stdout.lock();
         let status = format!(
@@ -137,7 +150,7 @@ fn zoom_loop(
 
         // f64 ist erschöpft -> von vorne beginnen
         if zoom < MIN_ZOOM {
-            zoom = initial_zoom;
+            zoom = view.initial_zoom;
         }
 
         // Sleep for the remaining frame time
@@ -160,14 +173,31 @@ fn main() {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--width" | "-w" => { i += 1; width = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(width); }
-            "--height" | "-h" => { i += 1; height = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(height); }
-            "--iter" | "-i" => { i += 1; max_iter = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_iter); }
-            "--center" | "-c" => { i += 1; center = args.get(i).cloned().unwrap_or(center); }
-            "--zoom" | "-z" => { i += 1; zoom = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(zoom); }
+            "--width" | "-w" => {
+                i += 1;
+                width = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(width);
+            }
+            "--height" | "-h" => {
+                i += 1;
+                height = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(height);
+            }
+            "--iter" | "-i" => {
+                i += 1;
+                max_iter = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_iter);
+            }
+            "--center" | "-c" => {
+                i += 1;
+                center = args.get(i).cloned().unwrap_or(center);
+            }
+            "--zoom" | "-z" => {
+                i += 1;
+                zoom = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(zoom);
+            }
             other => {
-                eprintln!("Unbekannte Option: {other}\n\n                    Nutzung: mandelbrot [--width N] [--height N] [--iter N] \
-                    [--center real,imag] [--zoom F]");
+                eprintln!(
+                    "Unbekannte Option: {other}\n\n                    Nutzung: mandelbrot [--width N] [--height N] [--iter N] \
+                    [--center real,imag] [--zoom F]"
+                );
                 std::process::exit(1);
             }
         }
@@ -188,10 +218,19 @@ fn main() {
 
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
+    let view = FractalView {
+        width,
+        height,
+        max_iter,
+        center_r,
+        center_i,
+        initial_zoom: zoom,
+    };
 
     ctrlc::set_handler(move || {
         r.store(false, Ordering::SeqCst);
-    }).expect("Error setting Ctrl-C handler");
+    })
+    .expect("Error setting Ctrl-C handler");
 
     loop {
         // Clear the Ctrl-C flag at the start of each loop iteration
@@ -202,7 +241,9 @@ fn main() {
         let _ = io::stdout().flush();
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input).expect("Failed to read input");
+        io::stdin()
+            .read_line(&mut input)
+            .expect("Failed to read input");
 
         let input = input.trim();
         if input.eq_ignore_ascii_case("q") || input.eq_ignore_ascii_case("quit") {
@@ -217,9 +258,7 @@ fn main() {
             }
         };
 
-        zoom_loop(
-            &running, width, height, max_iter, center_r, center_i, zoom, rate,
-        );
+        zoom_loop(&running, &view, rate);
     }
 
     println!("Goodbye!");
